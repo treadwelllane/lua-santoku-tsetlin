@@ -10,12 +10,12 @@ local arr = require("santoku.array")
 local rand = require("santoku.random")
 
 local CLASSES = 2
-local FEATURES = 607
-local CLAUSES = 40
+local FEATURES = 12
+local CLAUSES = 10
 local STATE_BITS = 8
-local THRESHOLD = 40
+local THRESHOLD = 15
 local SPECIFICITY = 3.9
-local DROP_CLAUSE = 0.85
+local DROP_CLAUSE = 1--0.85
 local BOOST_TRUE_POSITIVE = false
 local MAX_EPOCHS = 10
 
@@ -47,13 +47,6 @@ local function read_data (fp, max)
   return problems, solutions
 end
 
-local function pack_data (ps, ss)
-  local b = bm.raw_matrix(ps, FEATURES * 2)
-  local m0 = mtx.create(1, #ss)
-  mtx.set(m0, 1, ss)
-  return b, mtx.raw(m0, 1, 1, "u32")
-end
-
 test("tsetlin", function ()
 
   local MAX = nil
@@ -69,21 +62,20 @@ test("tsetlin", function ()
   arr.shuffle(train_problems, train_solutions)
   arr.shuffle(test_problems, test_solutions)
 
-  print("Packing data")
-  local train_problems_packed, train_solutions_packed = pack_data(train_problems, train_solutions)
-  local test_problems_packed, test_solutions_packed = pack_data(test_problems, test_solutions)
-
   local t = tm.create(CLASSES, FEATURES, CLAUSES, STATE_BITS, THRESHOLD, BOOST_TRUE_POSITIVE)
 
   print("Training")
   for epoch = 1, MAX_EPOCHS do
 
     local start = os.clock()
-    tm.train(t, #train_problems, train_problems_packed, train_solutions_packed, SPECIFICITY, DROP_CLAUSE)
+    tm.train(t, train_problems, train_solutions, SPECIFICITY, DROP_CLAUSE)
     local stop = os.clock()
 
-    local test_score, confusion, predictions = tm.evaluate(t, #test_problems, test_problems_packed, test_solutions_packed, epoch == MAX_EPOCHS)
-    local train_score = tm.evaluate(t, #train_problems, train_problems_packed, train_solutions_packed)
+    local test_score, confusion, predictions =
+      tm.evaluate(t, test_problems, test_solutions, epoch == MAX_EPOCHS)
+
+    local train_score =
+      tm.evaluate(t, train_problems, train_solutions)
 
     str.printf("Epoch\t%-4d\tTest\t%4.2f\tTrain\t%4.2f\tTime\t%f\n", epoch, test_score, train_score, stop - start)
 

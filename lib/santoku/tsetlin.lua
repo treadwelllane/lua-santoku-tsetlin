@@ -13,10 +13,12 @@ local it_map = it.map
 local it_collect = it.collect
 local it_pairs = it.pairs
 
-local function evaluate (t, n, ps, ss, track_stats)
+local function evaluate (t, ps, ss, track_stats)
+
+  local n = #ps
 
   local correct, confusion, predictions, observations =
-    tm_evaluate(t, n, ps, ss, track_stats)
+    tm_evaluate(t, ps, ss, track_stats)
 
   local confusion_ranked = track_stats and a_sort(it_collect(it_flatten(it_map(function (e, ps)
     return it_map(function (p, c)
