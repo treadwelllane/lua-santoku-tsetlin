@@ -44,16 +44,13 @@ struct TsetlinMachine {
   bool boost_true_positive;
   unsigned int clauses;
   unsigned int state_bits;
-  unsigned int la_chunks;
-  unsigned int clause_chunks;
-  unsigned int filter;
 	roaring_bitmap_t **ta_state;
   roaring_bitmap_t *mask1;
   roaring_bitmap_t *tmp;
-	unsigned int *clause_output;
 	roaring_bitmap_t *feedback_to_la;
+	roaring_bitmap_t *feedback_to_clauses;
   roaring_bitmap_t *drop_clause;
-	int *feedback_to_clauses;
+	roaring_bitmap_t *clause_output;
 };
 
 static uint64_t const multiplier = 6364136223846793005u;
@@ -150,24 +147,20 @@ static inline int sum_up_class_votes (struct TsetlinMachine *tm, bool predict)
 {
   roaring_bitmap_t *mask01 = roaring_bitmap_create();
   roaring_bitmap_t *mask10 = roaring_bitmap_create();
-  roaring_bitmap_t *clause_output = roaring_bitmap_create();
   for (unsigned int i = 0; i < tm->clauses; i ++) {
     if (i % 2 == 0)
       roaring_bitmap_add(mask10, i);
     else
       roaring_bitmap_add(mask01, i);
   }
-  for (unsigned int i = 0; i < tm->clauses; i ++)
-    if (tm->clause_output[i / (sizeof(unsigned int) * CHAR_BIT)] & (1 << (i % (sizeof(unsigned int) * CHAR_BIT))))
-      roaring_bitmap_add(clause_output, i);
   roaring_bitmap_t *tmp_pos = roaring_bitmap_create();
   roaring_bitmap_t *tmp_neg = roaring_bitmap_create();
 
   roaring_bitmap_clear(tmp_pos);
   roaring_bitmap_clear(tmp_neg);
   roaring_bitmap_t *drop = predict ? tm->mask1 : tm->drop_clause;
-  roaring_bitmap_or_inplace(tmp_pos, clause_output);
-  roaring_bitmap_or_inplace(tmp_neg, clause_output);
+  roaring_bitmap_or_inplace(tmp_pos, tm->clause_output);
+  roaring_bitmap_or_inplace(tmp_neg, tm->clause_output);
   roaring_bitmap_and_inplace(tmp_pos, drop);
   roaring_bitmap_and_inplace(tmp_neg, drop);
   roaring_bitmap_and_inplace(tmp_pos, mask10);
@@ -179,7 +172,6 @@ static inline int sum_up_class_votes (struct TsetlinMachine *tm, bool predict)
 	class_sum = (class_sum > threshold) ? threshold : class_sum;
 	class_sum = (class_sum < -threshold) ? -threshold : class_sum;
 
-  roaring_bitmap_free(clause_output);
   roaring_bitmap_free(mask01);
   roaring_bitmap_free(mask10);
   roaring_bitmap_free(tmp_pos);
@@ -190,7 +182,7 @@ static inline int sum_up_class_votes (struct TsetlinMachine *tm, bool predict)
 
 static inline void tm_calculate_clause_output (struct TsetlinMachine *tm, roaring_bitmap_t *p, bool predict)
 {
-  memset((*tm).clause_output, 0, tm->clause_chunks * sizeof(unsigned int));
+  roaring_bitmap_clear(tm->clause_output);
   for (long int j = 0; j < tm->clauses; j++) {
     roaring_bitmap_clear(tm->tmp);
     roaring_bitmap_t *actions = tm->ta_state[j * tm->state_bits + (tm->state_bits - 1)];
@@ -200,11 +192,8 @@ static inline void tm_calculate_clause_output (struct TsetlinMachine *tm, roarin
     roaring_bitmap_and_inplace(tm->tmp, p);
     output = roaring_bitmap_equals(tm->tmp, actions);
     output = output && !(predict && all_exclude);
-    if (output) {
-      unsigned int clause_chunk = j / (sizeof(unsigned int) * CHAR_BIT);
-      unsigned int clause_chunk_pos = j % (sizeof(unsigned int) * CHAR_BIT);
-      (*tm).clause_output[clause_chunk] |= (1 << clause_chunk_pos);
-    }
+    if (output)
+      roaring_bitmap_add(tm->clause_output, j);
   }
 }
 
@@ -212,29 +201,23 @@ static inline void tm_update (struct TsetlinMachine *tm, roaring_bitmap_t *bm, u
 {
   tm_calculate_clause_output(tm, bm, false);
 
-  roaring_bitmap_t *feedback_to_clauses = roaring_bitmap_create();
-  roaring_bitmap_t *clause_output = roaring_bitmap_create();
-  for (unsigned int i = 0; i < tm->clauses; i ++)
-    if (tm->clause_output[i / (sizeof(unsigned int) * CHAR_BIT)] & (1 << (i % (sizeof(unsigned int) * CHAR_BIT))))
-      roaring_bitmap_add(clause_output, i);
-
   long int tgt = target;
   int class_sum = sum_up_class_votes(tm, false);
   double p = (1.0/(tm->threshold*2))*(tm->threshold + (1 - 2*tgt)*class_sum);
 
-  roaring_bitmap_clear(feedback_to_clauses);
+  roaring_bitmap_clear(tm->feedback_to_clauses);
   for (unsigned int i = 0; i < tm->clauses; i ++)
     if (((float)fast_rand())/((float)UINT32_MAX) <= p)
-      roaring_bitmap_add(feedback_to_clauses, i);
-  roaring_bitmap_and_inplace(feedback_to_clauses, tm->drop_clause);
+      roaring_bitmap_add(tm->feedback_to_clauses, i);
+  roaring_bitmap_and_inplace(tm->feedback_to_clauses, tm->drop_clause);
 
 	for (long int j = 0; j < tm->clauses; j++) {
-		if (!roaring_bitmap_contains(feedback_to_clauses, j))
+		if (!roaring_bitmap_contains(tm->feedback_to_clauses, j))
 			continue;
 		if ((2 * tgt - 1) * (1 - 2 * (j & 1)) == -1) {
 
       // Type II feedback
-			if (roaring_bitmap_contains(clause_output, j))
+			if (roaring_bitmap_contains(tm->clause_output, j))
       {
         roaring_bitmap_clear(tm->tmp);
         roaring_bitmap_or_inplace(tm->tmp, bm);
@@ -248,7 +231,7 @@ static inline void tm_update (struct TsetlinMachine *tm, roaring_bitmap_t *bm, u
 			// Type I Feedback
 			tm_initialize_random_streams(tm, specificity);
 
-			if (roaring_bitmap_contains(clause_output, j)) {
+			if (roaring_bitmap_contains(tm->clause_output, j)) {
         if (tm->boost_true_positive) {
           tm_inc(tm, j, bm);
         } else {
@@ -269,8 +252,6 @@ static inline void tm_update (struct TsetlinMachine *tm, roaring_bitmap_t *bm, u
 		}
 	}
 
-  roaring_bitmap_free(feedback_to_clauses);
-  roaring_bitmap_free(clause_output);
 }
 
 static inline int tm_score (struct TsetlinMachine *tm, roaring_bitmap_t *bm) {
@@ -281,13 +262,14 @@ static inline int tm_score (struct TsetlinMachine *tm, roaring_bitmap_t *bm) {
 struct MultiClassTsetlinMachine {
   unsigned int classes;
   unsigned int features;
-  unsigned int la_chunks;
   unsigned int clauses;
-  unsigned int clause_chunks;
   unsigned int state_bits;
   roaring_bitmap_t *drop_clause;
   roaring_bitmap_t *mask1;
   roaring_bitmap_t *tmp;
+  roaring_bitmap_t *feedback_to_la;
+  roaring_bitmap_t *feedback_to_clauses;
+	roaring_bitmap_t *clause_output;
 	struct TsetlinMachine **tsetlin_machines;
 };
 
@@ -381,13 +363,13 @@ static inline int tk_tsetlin_create (lua_State *L)
   mc_tm->classes = tk_tsetlin_checkunsigned(L, 1);
   mc_tm->features = tk_tsetlin_checkunsigned(L, 2);
   mc_tm->clauses = tk_tsetlin_checkunsigned(L, 3);
-  mc_tm->la_chunks = (2 * mc_tm->features - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
-  mc_tm->clause_chunks = (mc_tm->clauses - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
   mc_tm->drop_clause = roaring_bitmap_create();
   mc_tm->tsetlin_machines = malloc(sizeof(struct TsetlinMachine *) * mc_tm->classes);
   mc_tm->state_bits = tk_tsetlin_checkunsigned(L, 4);
   mc_tm->mask1 = roaring_bitmap_create();
   mc_tm->tmp = roaring_bitmap_create();
+  mc_tm->feedback_to_la = roaring_bitmap_create();
+  mc_tm->feedback_to_clauses = roaring_bitmap_create();
   roaring_bitmap_add_range(mc_tm->mask1, 0, mc_tm->features * 2);
 	for (long int i = 0; i < mc_tm->classes; i++) {
     struct TsetlinMachine *tm = (void *)malloc(sizeof(struct TsetlinMachine));
@@ -398,15 +380,10 @@ static inline int tk_tsetlin_create (lua_State *L)
     tm->threshold = tk_tsetlin_checkunsigned(L, 5);
     luaL_checktype(L, 6, LUA_TBOOLEAN);
     tm->boost_true_positive = lua_toboolean(L, 6);
-    tm->la_chunks = mc_tm->la_chunks;
-    tm->clause_chunks = mc_tm->clause_chunks;
     tm->drop_clause = mc_tm->drop_clause;
-    tm->filter = (tm->features * 2) % (sizeof(unsigned int) * CHAR_BIT) != 0
-      ? ~(((unsigned int) ~0) << ((tm->features * 2) % (sizeof(unsigned int) * CHAR_BIT)))
-      : (unsigned int) ~0;
-    tm->clause_output = malloc(sizeof(unsigned int) * tm->clause_chunks);
-    tm->feedback_to_la = roaring_bitmap_create();
-    tm->feedback_to_clauses = malloc(sizeof(int) * tm->clause_chunks);
+    tm->clause_output = mc_tm->clause_output;
+    tm->feedback_to_la = mc_tm->feedback_to_la;
+    tm->feedback_to_clauses = mc_tm->feedback_to_clauses;
     tm->tmp = mc_tm->tmp;
     tm->mask1 = mc_tm->mask1;
     tm->ta_state = malloc(sizeof(roaring_bitmap_t *) * tm->clauses * tm->state_bits);
@@ -430,17 +407,16 @@ static inline int tk_tsetlin_destroy (lua_State *L)
   if (mc_tm == NULL)
     return 0;
 	for (long int i = 0; i < mc_tm->classes; i++) {
-    free(mc_tm->tsetlin_machines[i]->ta_state);
-    free(mc_tm->tsetlin_machines[i]->clause_output);
-    free(mc_tm->tsetlin_machines[i]->feedback_to_clauses);
-    roaring_bitmap_free(mc_tm->tsetlin_machines[i]->feedback_to_la);
-    for (unsigned int i = 0; i < mc_tm->clauses * mc_tm->state_bits; i ++)
-      roaring_bitmap_free(mc_tm->tsetlin_machines[i]->ta_state[i]);
+    for (unsigned int j = 0; j < mc_tm->clauses; j ++)
+      roaring_bitmap_free(mc_tm->tsetlin_machines[i]->ta_state[j]);
     free(mc_tm->tsetlin_machines[i]->ta_state);
     free(mc_tm->tsetlin_machines[i]);
   }
   roaring_bitmap_free(mc_tm->mask1);
   roaring_bitmap_free(mc_tm->tmp);
+  roaring_bitmap_free(mc_tm->feedback_to_la);
+  roaring_bitmap_free(mc_tm->feedback_to_clauses);
+  roaring_bitmap_free(mc_tm->clause_output);
   free(mc_tm->tsetlin_machines);
   free(mc_tm);
   *mc_tmp = NULL;
