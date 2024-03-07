@@ -1,6 +1,7 @@
 /*
 
 Copyright (C) 2024 Matthew Brooks (Lua integration, train/evaluate stats, drop clause)
+Copyright (C) 2024 Matthew Brooks (Roaring Bitmaps integration)
 Copyright (C) 2019 Ole-Christoffer Granmo (Original C implementation)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
