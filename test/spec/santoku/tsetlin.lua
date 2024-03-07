@@ -10,10 +10,10 @@ local arr = require("santoku.array")
 local rand = require("santoku.random")
 
 local CLASSES = 2
-local FEATURES = 12
-local CLAUSES = 10
+local FEATURES = 768
+local CLAUSES = 200
 local STATE_BITS = 8
-local THRESHOLD = 15
+local THRESHOLD = 20
 local SPECIFICITY = 3.9
 local DROP_CLAUSE = 1--0.85
 local BOOST_TRUE_POSITIVE = false
