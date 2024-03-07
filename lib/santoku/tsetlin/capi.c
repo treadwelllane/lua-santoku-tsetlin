@@ -386,6 +386,7 @@ static inline int tk_tsetlin_destroy (lua_State *L)
   roaring_bitmap_free(tm->feedback_to_la);
   roaring_bitmap_free(tm->feedback_to_clauses);
   roaring_bitmap_free(tm->clause_output);
+  roaring_bitmap_free(tm->drop_clause);
   free(tm->ta_state);
   free(tm);
   *tmp = NULL;
