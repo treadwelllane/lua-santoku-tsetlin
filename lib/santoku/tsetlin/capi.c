@@ -50,6 +50,8 @@ struct TsetlinMachine {
   roaring_bitmap_t *mask0;
   roaring_bitmap_t *mask10;
   roaring_bitmap_t *mask01;
+  roaring_bitmap_t *carry;
+  roaring_bitmap_t *carry_next;
   roaring_bitmap_t *tmp;
   roaring_bitmap_t *feedback_to_la;
   roaring_bitmap_t *feedback_to_clauses;
@@ -99,59 +101,47 @@ static inline void tm_initialize_random_streams (struct TsetlinMachine *tm, doub
 
 static inline void tm_inc (struct TsetlinMachine *tm, uint32_t class, uint32_t clause, roaring_bitmap_t *actives)
 {
-  roaring_bitmap_t *carry = roaring_bitmap_create();
-  roaring_bitmap_t *carry_next = roaring_bitmap_create();
-
-  roaring_bitmap_clear(carry);
-  roaring_bitmap_or_inplace(carry, actives);
+  roaring_bitmap_clear(tm->carry);
+  roaring_bitmap_or_inplace(tm->carry, actives);
 
   for (uint32_t b = 0; b < tm->state_bits; b ++)
   {
-    if (roaring_bitmap_get_cardinality(carry) == 0)
+    if (roaring_bitmap_get_cardinality(tm->carry) == 0)
       break;
-    roaring_bitmap_clear(carry_next);
-    roaring_bitmap_or_inplace(carry_next, tm_state_idx(tm, class, clause, b));
-    roaring_bitmap_and_inplace(carry_next, carry);
-    roaring_bitmap_xor_inplace(tm_state_idx(tm, class, clause, b), carry);
-    roaring_bitmap_clear(carry);
-    roaring_bitmap_or_inplace(carry, carry_next);
+    roaring_bitmap_clear(tm->carry_next);
+    roaring_bitmap_or_inplace(tm->carry_next, tm_state_idx(tm, class, clause, b));
+    roaring_bitmap_and_inplace(tm->carry_next, tm->carry);
+    roaring_bitmap_xor_inplace(tm_state_idx(tm, class, clause, b), tm->carry);
+    roaring_bitmap_clear(tm->carry);
+    roaring_bitmap_or_inplace(tm->carry, tm->carry_next);
   }
 
-  if (roaring_bitmap_get_cardinality(carry) > 0)
+  if (roaring_bitmap_get_cardinality(tm->carry) > 0)
     for (uint32_t b = 0; b < tm->state_bits; b ++)
-      roaring_bitmap_or_inplace(tm_state_idx(tm, class, clause, b), carry);
-
-  roaring_bitmap_free(carry);
-  roaring_bitmap_free(carry_next);
+      roaring_bitmap_or_inplace(tm_state_idx(tm, class, clause, b), tm->carry);
 }
 
 static inline void tm_dec (struct TsetlinMachine *tm, uint32_t class, uint32_t clause, roaring_bitmap_t *actives)
 {
-  roaring_bitmap_t *carry = roaring_bitmap_create();
-  roaring_bitmap_t *carry_next = roaring_bitmap_create();
-
-  roaring_bitmap_clear(carry);
-  roaring_bitmap_or_inplace(carry, actives);
+  roaring_bitmap_clear(tm->carry);
+  roaring_bitmap_or_inplace(tm->carry, actives);
 
   for (uint32_t b = 0; b < tm->state_bits; b ++)
   {
-    if (roaring_bitmap_get_cardinality(carry) == 0)
+    if (roaring_bitmap_get_cardinality(tm->carry) == 0)
       break;
-    roaring_bitmap_clear(carry_next);
-    roaring_bitmap_or_inplace(carry_next, tm_state_idx(tm, class, clause, b));
-    roaring_bitmap_xor_inplace(carry_next, tm->mask1);
-    roaring_bitmap_and_inplace(carry_next, carry);
-    roaring_bitmap_xor_inplace(tm_state_idx(tm, class, clause, b), carry);
-    roaring_bitmap_clear(carry);
-    roaring_bitmap_or_inplace(carry, carry_next);
+    roaring_bitmap_clear(tm->carry_next);
+    roaring_bitmap_or_inplace(tm->carry_next, tm_state_idx(tm, class, clause, b));
+    roaring_bitmap_xor_inplace(tm->carry_next, tm->mask1);
+    roaring_bitmap_and_inplace(tm->carry_next, tm->carry);
+    roaring_bitmap_xor_inplace(tm_state_idx(tm, class, clause, b), tm->carry);
+    roaring_bitmap_clear(tm->carry);
+    roaring_bitmap_or_inplace(tm->carry, tm->carry_next);
   }
 
-  if (roaring_bitmap_get_cardinality(carry) > 0)
+  if (roaring_bitmap_get_cardinality(tm->carry) > 0)
     for (uint32_t b = 0; b < tm->state_bits; b ++)
-      roaring_bitmap_andnot_inplace(tm_state_idx(tm, class, clause, b), carry);
-
-  roaring_bitmap_free(carry);
-  roaring_bitmap_free(carry_next);
+      roaring_bitmap_andnot_inplace(tm_state_idx(tm, class, clause, b), tm->carry);
 }
 
 static inline int32_t sum_up_class_votes (struct TsetlinMachine *tm, bool predict)
@@ -337,6 +327,8 @@ static inline int tk_tsetlin_create (lua_State *L)
   tm->mask0 = roaring_bitmap_create();
   tm->mask01 = roaring_bitmap_create();
   tm->mask10 = roaring_bitmap_create();
+  tm->carry = roaring_bitmap_create();
+  tm->carry_next = roaring_bitmap_create();
   tm->tmp = roaring_bitmap_create();
   tm->tmp_pos = roaring_bitmap_create();
   tm->tmp_neg = roaring_bitmap_create();
@@ -380,6 +372,8 @@ static inline int tk_tsetlin_destroy (lua_State *L)
   roaring_bitmap_free(tm->mask0);
   roaring_bitmap_free(tm->mask01);
   roaring_bitmap_free(tm->mask10);
+  roaring_bitmap_free(tm->carry);
+  roaring_bitmap_free(tm->carry_next);
   roaring_bitmap_free(tm->tmp);
   roaring_bitmap_free(tm->tmp_pos);
   roaring_bitmap_free(tm->tmp_neg);
