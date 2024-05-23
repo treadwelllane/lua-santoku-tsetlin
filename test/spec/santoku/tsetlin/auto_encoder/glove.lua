@@ -18,12 +18,12 @@ local TRAIN_TEST_RATIO = 0.2
 local CLAUSES = 80
 local STATE_BITS = 8
 local THRESHOLD = 200
-local SPECIFICITY = 1.003
-local LOSS_ALPHA = 0.001
+local SPECIFICITY = { 1.003, 1.003, 1 }
+local LOSS_ALPHA = 0.1
 local DROP_CLAUSE = 0.75
 local BOOST_TRUE_POSITIVE = false
 
-local EVALUATE_EVERY = 5
+local EVALUATE_EVERY = 1
 local MAX_RECORDS = 1000
 local MAX_EPOCHS = 40
 
@@ -100,21 +100,24 @@ test("tsetlin", function ()
   print("Train", n_train)
   print("Test", n_test)
 
-  local t = tm.auto_encoder(ENCODED_BITS, n_features, CLAUSES, STATE_BITS, THRESHOLD, BOOST_TRUE_POSITIVE)
+  for SPEC = SPECIFICITY[1], SPECIFICITY[2], SPECIFICITY[3] do
 
-  print("Training")
-  for epoch = 1, MAX_EPOCHS do
+    local t = tm.auto_encoder(ENCODED_BITS, n_features, CLAUSES, STATE_BITS, THRESHOLD, BOOST_TRUE_POSITIVE)
 
-    local start = os.time()
-    tm.train(t, n_train, train, SPECIFICITY, DROP_CLAUSE, LOSS_ALPHA)
-    local duration = os.time() - start
+    for epoch = 1, MAX_EPOCHS do
 
-    if epoch == MAX_EPOCHS or epoch % EVALUATE_EVERY == 0 then
-      local test_score = tm.evaluate(t, n_test, test)
-      local train_score = tm.evaluate(t, n_train, train)
-      str.printf("Epoch\t%-4d\tTime\t%d\tTest\t%4.2f\tTrain\t%4.2f\n", epoch, duration, test_score, train_score)
-    else
-      str.printf("Epoch\t%-4d\tTime\t%d\n", epoch, duration)
+      local start = os.time()
+      tm.train(t, n_train, train, SPEC, DROP_CLAUSE, LOSS_ALPHA)
+      local duration = os.time() - start
+
+      if epoch == MAX_EPOCHS or epoch % EVALUATE_EVERY == 0 then
+        local test_score = tm.evaluate(t, n_test, test)
+        local train_score = tm.evaluate(t, n_train, train)
+        str.printf("Epoch  %-4d  (spec %.3f)  Time  %d  Test  %4.2f  Train  %4.2f\n", epoch, SPEC, duration, test_score, train_score)
+      else
+        str.printf("Epoch  %-4d  (spec %.3f)  Time  %d\n", epoch, SPEC, duration)
+      end
+
     end
 
   end

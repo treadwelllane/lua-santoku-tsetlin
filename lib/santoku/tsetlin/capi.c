@@ -182,6 +182,14 @@ static inline unsigned int hamming (
   return distance;
 }
 
+static inline void flip_bits (
+  unsigned int *a,
+  unsigned int n
+) {
+  for (unsigned int i = 0; i < n; i ++)
+    a[i] = ~a[i];
+}
+
 static inline double hamming_loss (
   unsigned int *a,
   unsigned int *b,
@@ -192,82 +200,6 @@ static inline double hamming_loss (
   return pow(loss / (double) bits, alpha);
 }
 
-static inline unsigned int cardinality (
-  unsigned int *a,
-  unsigned int bits
-) {
-  unsigned int chunks = (bits - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
-  unsigned int total = 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    total += popcount(a[i]);
-  return total;
-}
-
-static inline double jaccard (
-  unsigned int *a,
-  unsigned int *b,
-  unsigned int bits
-) {
-  unsigned int chunks = (bits - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
-  unsigned int n_or = 0;
-  unsigned int n_and = 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    n_or += popcount(a[i] | b[i]);
-  if (n_or == 0)
-    return 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    n_and += popcount(a[i] & b[i]);
-  return (double) n_and / (double) n_or;
-}
-
-static inline double dice (
-  unsigned int *a,
-  unsigned int *b,
-  unsigned int bits
-) {
-  unsigned int chunks = (bits - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
-  unsigned int n_total = 0;
-  unsigned int n_and = 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    n_total += popcount(a[i]) + popcount(b[i]);
-  if (n_total == 0)
-    return 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    n_and += popcount(a[i] & b[i]);
-  return (double) 2.0 * n_and / (double) n_total;
-}
-
-static inline double overlap (
-  unsigned int *a,
-  unsigned int *b,
-  unsigned int bits
-) {
-  unsigned int chunks = (bits - 1) / (sizeof(unsigned int) * CHAR_BIT) + 1;
-  unsigned int n_a = 0;
-  unsigned int n_b = 0;
-  unsigned int n_and = 0;
-  for (unsigned int i = 0; i < chunks; i ++) {
-    n_a += popcount(a[i]);
-    n_b += popcount(b[i]);
-  }
-  unsigned int n_min = n_a < n_b ? n_a : n_b;
-  if (n_min == 0)
-    return 0;
-  for (unsigned int i = 0; i < chunks; i ++)
-    n_and += popcount(a[i] & b[i]);
-  return (double) n_and / (double) n_min;
-}
-
-static inline double jaccard_loss (
-  unsigned int *a,
-  unsigned int *b,
-  unsigned int bits,
-  double alpha
-) {
-  double loss = jaccard(a, b, bits);
-  return pow(1 - loss, alpha);
-}
-
 static inline double triplet_loss_hamming (
   unsigned int *a,
   unsigned int *n,
@@ -276,56 +208,10 @@ static inline double triplet_loss_hamming (
   double margin,
   double alpha
 ) {
-  unsigned int dist_an = hamming(a, n, bits);
-  unsigned int dist_ap = hamming(a, p, bits);
-  return fminf(1.0f, fmaxf(0.0f, (double) dist_ap - dist_an + margin) * alpha / bits);
-}
-
-static inline double triplet_loss_jaccard (
-  unsigned int *a,
-  unsigned int *n,
-  unsigned int *p,
-  unsigned int bits,
-  double margin,
-  double alpha
-) {
-  double dist_an = 1 - jaccard(a, n, bits);
-  double dist_ap = 1 - jaccard(a, p, bits);
-  return fminf(1.0f, fmaxf(0.0f, dist_ap - dist_an + margin) * alpha);
-}
-
-static inline double triplet_loss_dice (
-  unsigned int *a,
-  unsigned int *n,
-  unsigned int *p,
-  unsigned int bits,
-  double margin,
-  double alpha
-) {
-  double dist_an = 1 - dice(a, n, bits);
-  double dist_ap = 1 - dice(a, p, bits);
-  return fminf(1.0f, fmaxf(0.0f, dist_ap - dist_an + margin) * alpha);
-}
-
-static inline double triplet_loss_overlap (
-  unsigned int *a,
-  unsigned int *n,
-  unsigned int *p,
-  unsigned int bits,
-  double margin,
-  double alpha
-) {
-  double dist_an = 1 - overlap(a, n, bits);
-  double dist_ap = 1 - overlap(a, p, bits);
-  return fminf(1.0f, fmaxf(0.0f, dist_ap - dist_an + margin) * alpha);
-}
-
-static inline void flip_bits (
-  unsigned int *a,
-  unsigned int n
-) {
-  for (unsigned int i = 0; i < n; i ++)
-    a[i] = ~a[i];
+  double dist_an = (double) hamming(a, n, bits);
+  double dist_ap = (double) hamming(a, p, bits);
+  double loss = fmax(0.0, dist_ap - dist_an + margin) / ((double) bits + margin);
+  return loss <= 0 ? 0 : pow(loss, alpha);
 }
 
 static inline void tk_lua_callmod (
@@ -714,16 +600,13 @@ static inline void re_tm_encode (
   if (x_first == 1)
     memset((*states), 0, encoding_chunks * sizeof(unsigned int));
 
-  unsigned int off_token0 = 0;
-  unsigned int off_state0 = off_token0 + token_chunks;
-  unsigned int off_flipped = off_state0 + encoding_chunks;
-
   for (unsigned int i = x_first; i <= x_len; i ++) {
     unsigned int *x = x_data + token_chunks * (i - 1);
-    memcpy(input + off_token0, x, token_chunks * sizeof(unsigned int));
-    memcpy(input + off_state0, (*states) + (encoding_chunks * (i - 1)), encoding_chunks * sizeof(unsigned int));
-    memcpy(input + off_token0, input + off_flipped, token_chunks * sizeof(unsigned int) + encoding_chunks * sizeof(unsigned int));
-    flip_bits(input + off_flipped, token_chunks + encoding_chunks);
+    unsigned int *s = (*states) + (encoding_chunks * (i - 1));
+    for (unsigned int j = 0; j < token_chunks; j ++) {
+      input[j] = x[j] ^ s[j];
+      input[j + token_chunks] = ~(x[j] ^ s[j]);
+    }
     en_tm_encode(encoder, input, (*states) + (encoding_chunks * i), scores);
   }
 }
@@ -740,49 +623,57 @@ static inline void ae_tm_update (
   double specificity,
   double loss_alpha
 ) {
-  unsigned int encoding[tm->encoder.encoding_chunks * 2]; // encoding + flipped bits for input to decoder
-  unsigned int decoding[tm->decoder.encoding_chunks * 2]; // decoding + flipped bits to compare to input
+  tsetlin_classifier_t *encoder = &tm->encoder.encoder;
+  tsetlin_classifier_t *decoder = &tm->decoder.encoder;
+
+  unsigned int input_bits = encoder->input_bits;
+  unsigned int encoding_chunks = tm->encoder.encoding_chunks;
+  unsigned int encoding_bits = tm->encoder.encoding_bits;
+  unsigned int decoding_chunks = tm->decoder.encoding_chunks;
+
+  unsigned int encoding[encoding_chunks * 2]; // encoding + flipped bits for input to decoder
+  unsigned int decoding[decoding_chunks * 2]; // decoding + flipped bits to compare to input
 
   // encode input, copy, flip bits
   ae_tm_encode(tm, input, encoding, scores_e);
-  memcpy(encoding + tm->encoder.encoding_chunks, encoding, tm->encoder.encoding_chunks * sizeof(unsigned int));
-  flip_bits(encoding + tm->encoder.encoding_chunks, tm->encoder.encoding_chunks);
+  for (unsigned int i = 0; i < encoding_chunks; i ++)
+    encoding[i + encoding_chunks] = ~encoding[i];
 
   // decode encoding, copy, flip bits
   ae_tm_decode(tm, encoding, decoding, scores_d);
-  memcpy(decoding + tm->decoder.encoding_chunks, decoding, tm->decoder.encoding_chunks * sizeof(unsigned int));
-  flip_bits(decoding + tm->decoder.encoding_chunks, tm->decoder.encoding_chunks);
+  for (unsigned int i = 0; i < decoding_chunks; i ++)
+    decoding[i + decoding_chunks] = ~decoding[i];
 
   // compare input to decoding
-  double loss = hamming_loss(input, decoding, tm->encoder.encoder.input_bits, loss_alpha);
+  double loss = hamming_loss(input, decoding, input_bits, loss_alpha);
 
-  for (unsigned int bit = 0; bit < tm->encoder.encoding_bits; bit ++)
+  for (unsigned int bit = 0; bit < encoding_bits; bit ++)
     if (fast_chance(loss)) {
       unsigned int chunk0 = bit / (sizeof(unsigned int) * CHAR_BIT);
-      unsigned int chunk1 = chunk0 + tm->encoder.encoding_chunks;
+      unsigned int chunk1 = chunk0 + encoding_chunks;
       unsigned int pos = bit % (sizeof(unsigned int) * CHAR_BIT);
       unsigned int bit_x = encoding[chunk0] & (1U << pos);
       unsigned int bit_x_flipped = !bit_x;
       encoding[chunk0] ^= (1U << pos);
       encoding[chunk1] ^= (1U << pos);
       ae_tm_decode(tm, encoding, decoding, scores_d);
-      memcpy(decoding + tm->decoder.encoding_chunks, decoding, tm->decoder.encoding_chunks * sizeof(unsigned int));
-      flip_bits(decoding + tm->decoder.encoding_chunks, tm->decoder.encoding_chunks);
-      double loss0 = hamming_loss(input, decoding, tm->encoder.encoder.input_bits, loss_alpha);
+      memcpy(decoding + decoding_chunks, decoding, decoding_chunks * sizeof(unsigned int));
+      flip_bits(decoding + decoding_chunks, decoding_chunks);
+      double loss0 = hamming_loss(input, decoding, input_bits, loss_alpha);
       encoding[chunk0] ^= (1U << pos);
       encoding[chunk1] ^= (1U << pos);
       if (loss0 < loss)
-        tm_update(&tm->encoder.encoder, bit, input, bit_x_flipped, clause_output, feedback_to_clauses, feedback_to_la_e, specificity);
+        tm_update(encoder, bit, input, bit_x_flipped, clause_output, feedback_to_clauses, feedback_to_la_e, specificity);
       else if (loss0 > loss)
-        tm_update(&tm->encoder.encoder, bit, input, bit_x, clause_output, feedback_to_clauses, feedback_to_la_e, specificity);
+        tm_update(encoder, bit, input, bit_x, clause_output, feedback_to_clauses, feedback_to_la_e, specificity);
     }
 
-  for (unsigned int bit = 0; bit < tm->encoder.encoder.input_bits; bit ++)
+  for (unsigned int bit = 0; bit < input_bits; bit ++)
     if (fast_chance(loss)) {
       unsigned int chunk = bit / (sizeof(unsigned int) * CHAR_BIT);
       unsigned int pos = bit % (sizeof(unsigned int) * CHAR_BIT);
       unsigned int bit_i = input[chunk] & (1U << pos);
-      tm_update(&tm->decoder.encoder, bit, encoding, bit_i, clause_output, feedback_to_clauses, feedback_to_la_d, specificity);
+      tm_update(decoder, bit, encoding, bit_i, clause_output, feedback_to_clauses, feedback_to_la_d, specificity);
     }
 }
 
@@ -1100,15 +991,14 @@ static inline int tk_tsetlin_create_encoder (lua_State *L, tsetlin_encoder_t *tm
 
 static inline int tk_tsetlin_create_recurrent_encoder (lua_State *L, tsetlin_recurrent_encoder_t *tm)
 {
-  unsigned int output_bits = tk_tsetlin_checkunsigned(L, 1);
-  unsigned int token_bits = tk_tsetlin_checkunsigned(L, 2);
-  unsigned int clauses = tk_tsetlin_checkunsigned(L, 3);
-  unsigned int state_bits = tk_tsetlin_checkunsigned(L, 4);
-  unsigned int threshold = tk_tsetlin_checkunsigned(L, 5);
-  unsigned int boost_true_positive = tk_tsetlin_checkboolean(L, 6);
+  unsigned int token_bits = tk_tsetlin_checkunsigned(L, 1);
+  unsigned int clauses = tk_tsetlin_checkunsigned(L, 2);
+  unsigned int state_bits = tk_tsetlin_checkunsigned(L, 3);
+  unsigned int threshold = tk_tsetlin_checkunsigned(L, 4);
+  unsigned int boost_true_positive = tk_tsetlin_checkboolean(L, 5);
   tk_tsetlin_init_encoder(L, &tm->encoder,
-    output_bits,
-    (token_bits + output_bits),
+    token_bits,
+    token_bits,
     clauses,
     state_bits,
     threshold,

@@ -22,14 +22,14 @@ local MARGIN = 0.1
 local CLAUSES = 80
 local STATE_BITS = 8
 local THRESHOLD = 200
-local SPECIFICITY = 2
+local SPECIFICITY = { 5.31, 5.31, 1 }
 local DROP_CLAUSE = 0.75
-local LOSS_ALPHA = 0.01
+local LOSS_ALPHA = 1
 local BOOST_TRUE_POSITIVE = false
 
 local EVALUATE_EVERY = 1
 local MAX_RECORDS = 1000
-local MAX_EPOCHS = 40
+local MAX_EPOCHS = 100
 
 local function read_data (fp, max)
 
@@ -167,25 +167,27 @@ test("tsetlin", function ()
   print("Train", n_train)
   print("Test", n_test)
 
-  local t = tm.encoder(ENCODED_BITS, dataset.n_features, CLAUSES, STATE_BITS, THRESHOLD, BOOST_TRUE_POSITIVE)
+  for SPEC = SPECIFICITY[1], SPECIFICITY[2], SPECIFICITY[3] do
 
-  print("Training")
-  for epoch = 1, MAX_EPOCHS do
+    local t = tm.encoder(ENCODED_BITS, dataset.n_features, CLAUSES, STATE_BITS, THRESHOLD, BOOST_TRUE_POSITIVE)
 
-    local start = os.time()
-    tm.train(t, n_train, train_tokens,
-      SPECIFICITY, DROP_CLAUSE, MARGIN,
-      LOSS_ALPHA)
-    local duration = os.time() - start
+    for epoch = 1, MAX_EPOCHS do
 
-    if epoch == MAX_EPOCHS or epoch % EVALUATE_EVERY == 0 then
-      local test_score = tm.evaluate(t, n_test, test_tokens, MARGIN)
-      local train_score = tm.evaluate(t, n_train, train_tokens, MARGIN)
-      str.printf("Epoch %-4d  Time %d  Test %4.2f  Train %4.2f\n",
-        epoch, duration, test_score, train_score)
-    else
-      str.printf("Epoch %-4d  Time %d\n",
-        epoch, duration)
+      local start = os.time()
+      tm.train(t, n_train, train_tokens,
+        SPEC, DROP_CLAUSE, MARGIN, LOSS_ALPHA)
+      local duration = os.time() - start
+
+      if epoch == MAX_EPOCHS or epoch % EVALUATE_EVERY == 0 then
+        local test_score = tm.evaluate(t, n_test, test_tokens, MARGIN)
+        local train_score = tm.evaluate(t, n_train, train_tokens, MARGIN)
+        str.printf("Epoch %-4d (spec %.3f) Time %d  Test %4.2f  Train %4.2f\n",
+          epoch, SPEC, duration, test_score, train_score)
+      else
+        str.printf("Epoch %-4d (spec %.3f) Time %d\n",
+          epoch, SPEC, duration)
+      end
+
     end
 
   end
