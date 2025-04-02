@@ -65,15 +65,21 @@ typedef struct {
   unsigned int input_chunks;
   unsigned int clause_chunks;
   unsigned int state_chunks;
+  unsigned int weight_state_chunks;
   unsigned int action_chunks;
+  unsigned int weight_action_chunks;
+  unsigned int class_chunks;
   unsigned int filter;
-  unsigned int *state; // class clause bit chunk
-  unsigned int *actions; // class clause chunk
-  unsigned int *active_clause; // class clause chunk
+  unsigned int *state; // clause bit chunk
+  unsigned int *actions; // clause chunk
+  unsigned int *weight_state; // class clause bit chunk
+  unsigned int *weight_actions; // class clause chunk
+  unsigned int *active_clause; // chunk
   double specificity_low;
   double specificity_high;
   double *specificity;
   pthread_mutex_t *locks;
+  pthread_mutex_t *weight_locks;
 } tsetlin_classifier_t;
 
 typedef struct {
@@ -103,27 +109,41 @@ typedef struct {
   };
 } tsetlin_t;
 
-#define tm_state_get_lock(tm, class, clause, chunk) \
-  (&(tm)->locks[(class) * (tm)->clauses * (tm)->input_chunks + \
-                (clause) * (tm)->input_chunks + \
-                (chunk)])
-
 #define tm_specificity(tm, j) ((tm)->specificity[j])
 
-#define tm_state_lock(tm, class, clause, chunk) \
-	pthread_mutex_lock(tm_state_get_lock(tm, class, clause, chunk));
+#define tm_state_get_lock(tm, clause, chunk) \
+  (&(tm)->locks[(clause) * (tm)->input_chunks + \
+                (chunk)])
 
-#define tm_state_unlock(tm, class, clause, chunk) \
-	pthread_mutex_unlock(tm_state_get_lock(tm, class, clause, chunk));
+#define tm_state_lock(tm, clause, chunk) \
+	pthread_mutex_lock(tm_state_get_lock(tm, clause, chunk));
 
-#define tm_state_counts(tm, class, clause, input_chunk) \
-  (&(tm)->state[(class) * (tm)->clauses * (tm)->input_chunks * ((tm)->state_bits - 1) + \
-                (clause) * (tm)->input_chunks * ((tm)->state_bits - 1) + \
+#define tm_state_unlock(tm, clause, chunk) \
+	pthread_mutex_unlock(tm_state_get_lock(tm, clause, chunk));
+
+#define tm_state_counts(tm, clause, input_chunk) \
+  (&(tm)->state[(clause) * (tm)->input_chunks * ((tm)->state_bits - 1) + \
                 (input_chunk) * ((tm)->state_bits - 1)])
 
-#define tm_state_actions(tm, class, clause) \
-  (&(tm)->actions[(class) * (tm)->clauses * (tm)->input_chunks + \
-                  (clause) * (tm)->input_chunks])
+#define tm_state_actions(tm, clause) \
+  (&(tm)->actions[(clause) * (tm)->input_chunks])
+
+#define tm_weight_state_get_lock(tm, class, chunk) \
+  (&(tm)->weight_locks[(class) * (tm)->clause_chunks + \
+                (chunk)])
+
+#define tm_weight_state_lock(tm, clause, chunk) \
+	pthread_mutex_lock(tm_weight_state_get_lock(tm, clause, chunk));
+
+#define tm_weight_state_unlock(tm, clause, chunk) \
+	pthread_mutex_unlock(tm_weight_state_get_lock(tm, clause, chunk));
+
+#define tm_weight_state_counts(tm, class, clause_chunk) \
+  (&(tm)->weight_state[(class) * (tm)->clause_chunks * ((tm)->state_bits - 1) + \
+                (clause_chunk) * ((tm)->state_bits - 1)])
+
+#define tm_weight_state_actions(tm, class) \
+  (&(tm)->actions[(class) * (tm)->clause_chunks])
 
 static uint64_t const multiplier = 6364136223846793005u;
 __thread uint64_t mcg_state = 0xcafef00dd15ea5e5u;
@@ -502,17 +522,19 @@ static inline void tm_initialize_random_streams (
   }
 }
 
-static inline void tm_inc (
+static inline void tm_inc_weight (
   tsetlin_classifier_t *tm,
   unsigned int class,
-  unsigned int clause,
   unsigned int chunk,
   unsigned int active
 ) {
-  tm_state_lock(tm, class, clause, chunk);
+  if (!active)
+    return;
+
+  tm_weight_state_lock(tm, class, chunk);
 
   unsigned int m = tm->state_bits - 1;
-  unsigned int *counts = tm_state_counts(tm, class, clause, chunk);
+  unsigned int *counts = tm_weight_state_counts(tm, class, chunk);
   unsigned int carry, carry_next;
   carry = active;
   for (unsigned int b = 0; b < m; b ++) {
@@ -520,7 +542,7 @@ static inline void tm_inc (
     counts[b] ^= carry;
     carry = carry_next;
   }
-  unsigned int *actions = tm_state_actions(tm, class, clause);
+  unsigned int *actions = tm_weight_state_actions(tm, class);
   carry_next = actions[chunk] & carry;
   actions[chunk] ^= carry;
   carry = carry_next;
@@ -528,20 +550,53 @@ static inline void tm_inc (
     counts[b] |= carry;
   actions[chunk] |= carry;
 
-  tm_state_unlock(tm, class, clause, chunk);
+  tm_weight_state_unlock(tm, class, chunk);
 }
 
-static inline void tm_dec (
+static inline void tm_inc (
   tsetlin_classifier_t *tm,
-  unsigned int class,
   unsigned int clause,
   unsigned int chunk,
   unsigned int active
 ) {
-  tm_state_lock(tm, class, clause, chunk);
+  if (!active)
+    return;
+
+  tm_state_lock(tm, clause, chunk);
 
   unsigned int m = tm->state_bits - 1;
-  unsigned int *counts = tm_state_counts(tm, class, clause, chunk);
+  unsigned int *counts = tm_state_counts(tm, clause, chunk);
+  unsigned int carry, carry_next;
+  carry = active;
+  for (unsigned int b = 0; b < m; b ++) {
+    carry_next = counts[b] & carry;
+    counts[b] ^= carry;
+    carry = carry_next;
+  }
+  unsigned int *actions = tm_state_actions(tm, clause);
+  carry_next = actions[chunk] & carry;
+  actions[chunk] ^= carry;
+  carry = carry_next;
+  for (unsigned int b = 0; b < m; b ++)
+    counts[b] |= carry;
+  actions[chunk] |= carry;
+
+  tm_state_unlock(tm, clause, chunk);
+}
+
+static inline void tm_dec_weight (
+  tsetlin_classifier_t *tm,
+  unsigned int class,
+  unsigned int chunk,
+  unsigned int active
+) {
+  if (!active)
+    return;
+
+  tm_weight_state_lock(tm, class, chunk);
+
+  unsigned int m = tm->state_bits - 1;
+  unsigned int *counts = tm_weight_state_counts(tm, class, chunk);
   unsigned int carry, carry_next;
   carry = active;
   for (unsigned int b = 0; b < m; b ++) {
@@ -549,7 +604,7 @@ static inline void tm_dec (
     counts[b] ^= carry;
     carry = carry_next;
   }
-  unsigned int *actions = tm_state_actions(tm, class, clause);
+  unsigned int *actions = tm_weight_state_actions(tm, class);
   carry_next = (~actions[chunk]) & carry;
   actions[chunk] ^= carry;
   carry = carry_next;
@@ -557,37 +612,42 @@ static inline void tm_dec (
     counts[b] &= ~carry;
   actions[chunk] &= ~carry;
 
-  tm_state_unlock(tm, class, clause, chunk);
+  tm_weight_state_unlock(tm, class, chunk);
 }
 
-static inline long int sum_up_class_votes (
+static inline void tm_dec (
   tsetlin_classifier_t *tm,
-  unsigned int *clause_output,
-  bool predict
+  unsigned int clause,
+  unsigned int chunk,
+  unsigned int active
 ) {
-  long int class_sum = 0;
-  unsigned int *active = tm->active_clause;
-  unsigned int clause_chunks = tm->clause_chunks;
-  if (predict) {
-    for (unsigned int i = 0; i < clause_chunks; i ++) {
-      class_sum += popcount(clause_output[i] & 0x55555555); // 0101
-      class_sum -= popcount(clause_output[i] & 0xaaaaaaaa); // 1010
-    }
-  } else {
-    for (unsigned int i = 0; i < clause_chunks; i ++) {
-      class_sum += popcount(clause_output[i] & 0x55555555 & active[i]); // 0101
-      class_sum -= popcount(clause_output[i] & 0xaaaaaaaa & active[i]); // 1010
-    }
+  if (!active)
+    return;
+
+  tm_state_lock(tm, clause, chunk);
+
+  unsigned int m = tm->state_bits - 1;
+  unsigned int *counts = tm_state_counts(tm, clause, chunk);
+  unsigned int carry, carry_next;
+  carry = active;
+  for (unsigned int b = 0; b < m; b ++) {
+    carry_next = (~counts[b]) & carry;
+    counts[b] ^= carry;
+    carry = carry_next;
   }
-  long int threshold = tm->threshold;
-  class_sum = (class_sum > threshold) ? threshold : class_sum;
-  class_sum = (class_sum < -threshold) ? -threshold : class_sum;
-  return class_sum;
+  unsigned int *actions = tm_state_actions(tm, clause);
+  carry_next = (~actions[chunk]) & carry;
+  actions[chunk] ^= carry;
+  carry = carry_next;
+  for (unsigned int b = 0; b < m; b ++)
+    counts[b] &= ~carry;
+  actions[chunk] &= ~carry;
+
+  tm_state_unlock(tm, clause, chunk);
 }
 
 static inline void tm_calculate_clause_output (
   tsetlin_classifier_t *tm,
-  unsigned int class,
   unsigned int *input,
   unsigned int *clause_output,
   bool predict
@@ -601,7 +661,7 @@ static inline void tm_calculate_clause_output (
     unsigned int input_chunks = tm->input_chunks;
     unsigned int clause_chunk = j / BITS;
     unsigned int clause_chunk_pos = j % BITS;
-    unsigned int *actions = tm_state_actions(tm, class, j);
+    unsigned int *actions = tm_state_actions(tm, j);
     for (unsigned int k = 0; k < input_chunks - 1; k ++) {
       output |= ((actions[k] & input[k]) ^ actions[k]);
       all_exclude |= actions[k];
@@ -618,22 +678,26 @@ static inline void tm_calculate_clause_output (
 
 static inline void tm_update (
   tsetlin_classifier_t *tm,
-  unsigned int class,
   unsigned int *input,
+  unsigned int class,
   unsigned int target,
   unsigned int *clause_output,
   unsigned int *feedback_to_clauses,
   unsigned int *feedback_to_la
 ) {
-  tm_calculate_clause_output(tm, class, input, clause_output, false);
-  long int class_sum = sum_up_class_votes(tm, clause_output, false);
+  unsigned int *active_clause = tm->active_clause;
+  unsigned int clause_chunks = tm->clause_chunks;
+  unsigned int *weight_actions = tm->weight_actions;
+  long int class_sum = 0;
+  for (unsigned int clause_chunk = 0; clause_chunk < clause_chunks; clause_chunk ++) {
+    class_sum += popcount(clause_output[clause_chunk] & weight_actions[class * clause_chunks + clause_chunk] & active_clause[clause_chunk]);
+    class_sum -= popcount(clause_output[clause_chunk] & ~weight_actions[class * clause_chunks + clause_chunk] & active_clause[clause_chunk]);
+  }
   long int tgt = target ? 1 : 0;
   unsigned int input_chunks = tm->input_chunks;
-  unsigned int clause_chunks = tm->clause_chunks;
   unsigned int boost_true_positive = tm->boost_true_positive;
   unsigned int clauses = tm->clauses;
   unsigned int threshold = tm->threshold;
-  unsigned int *active_clause = tm->active_clause;
   float p = (1.0 / (threshold * 2)) * (threshold + (1 - 2 * tgt) * class_sum);
   memset(feedback_to_clauses, 0, clause_chunks * sizeof(unsigned int));
   for (unsigned int i = 0; i < clauses; i ++) {
@@ -644,41 +708,45 @@ static inline void tm_update (
   for (unsigned int i = 0; i < clause_chunks; i ++)
     feedback_to_clauses[i] &= active_clause[i];
   for (unsigned int j = 0; j < clauses; j ++) {
-    long int jl = (long int) j;
     unsigned int clause_chunk = j / BITS;
     unsigned int clause_chunk_pos = j % BITS;
-    unsigned int *actions = tm_state_actions(tm, class, j);
-    double specificity = tm_specificity(tm, j);
     if (!(feedback_to_clauses[clause_chunk] & (1U << clause_chunk_pos)))
       continue;
-    if ((2 * tgt - 1) * (1 - 2 * (jl & 1)) == -1) {
+    int polarity = (weight_actions[class * clause_chunks + clause_chunk] & (1U << clause_chunk_pos)) ? +1 : -1;
+    int update_type = (2 * tgt - 1) * polarity;
+    unsigned int *actions = tm_state_actions(tm, j);
+    double specificity = tm_specificity(tm, j);
+    if (update_type == -1) {
       // Type II feedback
-      if ((clause_output[clause_chunk] & (1U << clause_chunk_pos)) > 0)
+      if ((clause_output[clause_chunk] & (1U << clause_chunk_pos)) > 0) {
         for (unsigned int k = 0; k < input_chunks; k ++) {
           unsigned int active = (~input[k]) & (~actions[k]);
-          tm_inc(tm, class, j, k, active);
+          tm_inc(tm, j, k, active);
         }
-    } else if ((2 * tgt - 1) * (1 - 2 * (jl & 1)) == 1) {
+        tm_dec_weight(tm, class, clause_chunk, (1U << clause_chunk_pos));
+      }
+    } else if (update_type == 1) {
       // Type I Feedback
       tm_initialize_random_streams(tm, feedback_to_la, specificity);
       if ((clause_output[clause_chunk] & (1U << clause_chunk_pos)) > 0) {
         if (boost_true_positive)
           for (unsigned int k = 0; k < input_chunks; k ++) {
             unsigned int chunk = input[k];
-            tm_inc(tm, class, j, k, chunk);
+            tm_inc(tm, j, k, chunk);
           }
         else
           for (unsigned int k = 0; k < input_chunks; k ++) {
             unsigned int fb = input[k] & (~feedback_to_la[k]);
-            tm_inc(tm, class, j, k, fb);
+            tm_inc(tm, j, k, fb);
           }
         for (unsigned int k = 0; k < input_chunks; k ++) {
           unsigned int fb = (~input[k]) & feedback_to_la[k];
-          tm_dec(tm, class, j, k, fb);
+          tm_dec(tm, j, k, fb);
         }
+        tm_inc_weight(tm, class, clause_chunk, (1U << clause_chunk_pos));
       } else {
         for (unsigned int k = 0; k < input_chunks; k ++)
-          tm_dec(tm, class, j, k, feedback_to_la[k]);
+          tm_dec(tm, j, k, feedback_to_la[k]);
       }
     }
   }
@@ -706,10 +774,19 @@ static inline void tm_score (
   unsigned int *clause_output,
   long int *scores
 ) {
-  unsigned int n_classes = tm->classes;
-  for (unsigned int class = 0; class < n_classes; class ++) {
-    tm_calculate_clause_output(tm, class, input, clause_output, true);
-    scores[class] = sum_up_class_votes(tm, clause_output, true);
+  tm_calculate_clause_output(tm, input, clause_output, true);
+  unsigned int *weight_actions = tm->weight_actions;
+  unsigned int clause_chunks = tm->clause_chunks;
+  for (unsigned int class = 0; class < tm->classes; class ++) {
+    long int class_sum = 0;
+    for (unsigned int clause_chunk = 0; clause_chunk < clause_chunks; clause_chunk ++) {
+      class_sum += popcount(clause_output[clause_chunk] & weight_actions[class * clause_chunks + clause_chunk]);
+      class_sum -= popcount(clause_output[clause_chunk] & ~weight_actions[class * clause_chunks + clause_chunk]);
+    }
+    long int threshold = tm->threshold;
+    if (class_sum > threshold) class_sum = threshold;
+    if (class_sum < -threshold) class_sum = -threshold;
+    scores[class] = class_sum;
   }
 }
 
@@ -731,13 +808,15 @@ static inline void mc_tm_update (
   unsigned int *feedback_to_clauses,
   unsigned int *feedback_to_la
 ) {
-  tm_update(tm, class, input, 1, clause_output, feedback_to_clauses, feedback_to_la);
-  // TODO: Is there a faster way to do negative class selection? Is negative
-  // class selection even worth it?
-  unsigned int negative_class = (unsigned int) fast_rand() % tm->classes;
-  while (negative_class == class)
-    negative_class = (unsigned int) fast_rand() % tm->classes;
-  tm_update(tm, negative_class, input, 0, clause_output, feedback_to_clauses, feedback_to_la);
+  // tm_calculate_clause_output(tm, input, clause_output, false);
+  // tm_update(tm, input, class, 1, clause_output, feedback_to_clauses, feedback_to_la);
+  // unsigned int negative_class = (unsigned int) fast_rand() % tm->classes;
+  // while (negative_class == class)
+  //   negative_class = (unsigned int) fast_rand() % tm->classes;
+  // tm_update(tm, input, negative_class, 0, clause_output, feedback_to_clauses, feedback_to_la);
+  tm_calculate_clause_output(tm, input, clause_output, false);
+  for (unsigned int i = 0; i < tm->classes; i ++)
+    tm_update(tm, input, i, i == class, clause_output, feedback_to_clauses, feedback_to_la);
 }
 
 static inline void ae_tm_decode (
@@ -852,16 +931,16 @@ static inline void ae_tm_update (
     encoding[chunk0] ^= (1U << pos);
     encoding[chunk1] ^= (1U << pos);
     if (diff0 <= diff)
-      tm_update(&tm->encoder.encoder, bit, input, bit_x_flipped, clause_output, feedback_to_clauses, feedback_to_la_e);
+      tm_update(&tm->encoder.encoder, input, bit, bit_x_flipped, clause_output, feedback_to_clauses, feedback_to_la_e);
     else if (diff0 > diff)
-      tm_update(&tm->encoder.encoder, bit, input, bit_x, clause_output, feedback_to_clauses, feedback_to_la_e);
+      tm_update(&tm->encoder.encoder, input, bit, bit_x, clause_output, feedback_to_clauses, feedback_to_la_e);
   }
 
   for (unsigned int bit = 0; bit < tm->encoder.encoder.input_bits; bit ++) {
     unsigned int chunk = bit / BITS;
     unsigned int pos = bit % BITS;
     unsigned int bit_i = input[chunk] & (1U << pos);
-    tm_update(&tm->decoder.encoder, bit, encoding, bit_i, clause_output, feedback_to_clauses, feedback_to_la_d);
+    tm_update(&tm->decoder.encoder, encoding, bit, bit_i, clause_output, feedback_to_clauses, feedback_to_la_d);
   }
 }
 
@@ -904,24 +983,24 @@ static inline void en_tm_update (
     unsigned int bit_p = encoding_p[chunk] & (1U << pos);
     if ((bit_a && bit_n && bit_p) || (!bit_a && !bit_n && !bit_p)) {
       // flip n, keep a and p
-      tm_update(encoder, i, a, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, n, !bit_n, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, p, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, a, i, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, n, i, !bit_n, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, p, i, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
     } else if ((bit_a && bit_n && !bit_p) || (!bit_a && !bit_n && bit_p)) {
       // flip a, keep n and p
-      tm_update(encoder, i, a, !bit_a, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, n, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, p, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, a, i, !bit_a, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, n, i, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, p, i, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
     } else if ((bit_a && !bit_n && bit_p) || (!bit_a && bit_n && !bit_p)) {
       // keep all
-      tm_update(encoder, i, a, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, n, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, p, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, a, i, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, n, i, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, p, i, bit_p, clause_output, feedback_to_clauses, feedback_to_la);
     } else if ((bit_a && !bit_n && !bit_p) || (!bit_a && bit_n && bit_p)) {
       // flip p, keep a and n
-      tm_update(encoder, i, a, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, n, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
-      tm_update(encoder, i, p, !bit_p, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, a, i, bit_a, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, n, i, bit_n, clause_output, feedback_to_clauses, feedback_to_la);
+      tm_update(encoder, p, i, !bit_p, clause_output, feedback_to_clauses, feedback_to_la);
     }
   }
 
@@ -1052,13 +1131,17 @@ static inline void tk_tsetlin_init_classifier (
   tm->input_bits = 2 * tm->features;
   tm->input_chunks = (tm->input_bits - 1) / BITS + 1;
   tm->clause_chunks = (tm->clauses - 1) / BITS + 1;
-  tm->state_chunks = tm->classes * tm->clauses * (tm->state_bits - 1) * tm->input_chunks;
-  tm->action_chunks = tm->classes * tm->clauses * tm->input_chunks;
+  tm->state_chunks = tm->clauses * (tm->state_bits - 1) * tm->input_chunks;
+  tm->weight_state_chunks = tm->classes * (tm->state_bits - 1) * tm->clause_chunks;
+  tm->action_chunks = tm->clauses * tm->input_chunks;
+  tm->weight_action_chunks = tm->classes * tm->clause_chunks;
   tm->filter = tm->input_bits % BITS != 0
     ? ~(((unsigned int) ~0) << (tm->input_bits % BITS))
     : (unsigned int) ~0;
   tm->state = malloc(sizeof(unsigned int) * tm->state_chunks);
+  tm->weight_state = malloc(sizeof(unsigned int) * tm->weight_state_chunks);
   tm->actions = malloc(sizeof(unsigned int) * tm->action_chunks);
+  tm->weight_actions = malloc(sizeof(unsigned int) * tm->weight_action_chunks);
   tm->active_clause = malloc(sizeof(unsigned int) * tm->clause_chunks);
   tm->specificity_low = specificity_low;
   tm->specificity_high = specificity_high;
@@ -1066,20 +1149,31 @@ static inline void tk_tsetlin_init_classifier (
   for (unsigned int i = 0; i < tm->clauses; i ++)
     tm->specificity[i] = (1.0 * i / tm->clauses) * (tm->specificity_high - tm->specificity_low) + tm->specificity_low;
   tm->locks = malloc(sizeof(pthread_mutex_t) * tm->action_chunks);
+  tm->weight_locks = malloc(sizeof(pthread_mutex_t) * tm->weight_action_chunks);
   for (unsigned int i = 0; i < tm->action_chunks; i ++)
     pthread_mutex_init(&tm->locks[i], NULL);
-  if (!(tm->active_clause && tm->state && tm->actions))
+  for (unsigned int i = 0; i < tm->weight_action_chunks; i ++)
+    pthread_mutex_init(&tm->weight_locks[i], NULL);
+  if (!(tm->active_clause && tm->state && tm->actions && tm->weight_state && tm->weight_actions))
     luaL_error(L, "error in malloc during creation of classifier");
-  for (unsigned int i = 0; i < tm->classes; i ++)
-    for (unsigned int j = 0; j < tm->clauses; j ++)
-      for (unsigned int k = 0; k < tm->input_chunks; k ++) {
-        unsigned int m = tm->state_bits - 1;
-        unsigned int *actions = tm_state_actions(tm, i, j);
-        unsigned int *counts = tm_state_counts(tm, i, j, k);
-        actions[k] = 0U;
-        for (unsigned int b = 0; b < m; b ++)
-          counts[b] = ~0U;
-      }
+  for (unsigned int j = 0; j < tm->clauses; j ++)
+    for (unsigned int k = 0; k < tm->input_chunks; k ++) {
+      unsigned int m = tm->state_bits - 1;
+      unsigned int *actions = tm_state_actions(tm, j);
+      unsigned int *counts = tm_state_counts(tm, j, k);
+      actions[k] = 0U;
+      for (unsigned int b = 0; b < m; b ++)
+        counts[b] = ~0U;
+    }
+  for (unsigned int j = 0; j < tm->classes; j ++)
+    for (unsigned int k = 0; k < tm->clause_chunks; k ++) {
+      unsigned int m = tm->state_bits - 1;
+      unsigned int *actions = tm_weight_state_actions(tm, j);
+      unsigned int *counts = tm_weight_state_counts(tm, j, k);
+      actions[k] = ~0U;
+      for (unsigned int b = 0; b < m; b ++)
+        counts[b] = ~0U;
+    }
 }
 
 static inline int tk_tsetlin_init_encoder (
@@ -1213,8 +1307,12 @@ static inline void tk_tsetlin_destroy_classifier (tsetlin_classifier_t *tm)
     return;
   free(tm->state);
   tm->state = NULL;
+  free(tm->weight_state);
+  tm->weight_state = NULL;
   free(tm->actions);
   tm->actions = NULL;
+  free(tm->weight_actions);
+  tm->weight_actions = NULL;
   free(tm->active_clause);
   tm->active_clause = NULL;
   free(tm->specificity);
@@ -1224,6 +1322,11 @@ static inline void tk_tsetlin_destroy_classifier (tsetlin_classifier_t *tm)
       pthread_mutex_destroy(&tm->locks[i]);
   free(tm->locks);
   tm->locks = NULL;
+  if (tm->weight_locks)
+    for (unsigned int i = 0; i < tm->weight_action_chunks; i ++)
+      pthread_mutex_destroy(&tm->weight_locks[i]);
+  free(tm->weight_locks);
+  tm->weight_locks = NULL;
 }
 
 static inline int tk_tsetlin_destroy (lua_State *L)
@@ -1426,8 +1529,13 @@ static void *train_classifier_thread (void *arg)
     if (next >= data->n)
       return NULL;
     unsigned int idx = data->shuffle[next];
-    mc_tm_update(data->tm, data->ps + idx * input_chunks, data->ss[idx],
-        clause_output, feedback_to_clauses, feedback_to_la);
+    mc_tm_update(
+      data->tm,
+      data->ps + idx * input_chunks,
+      data->ss[idx],
+      clause_output,
+      feedback_to_clauses,
+      feedback_to_la);
   }
 }
 
@@ -2038,13 +2146,19 @@ static inline void _tk_tsetlin_persist_classifier (lua_State *L, tsetlin_classif
   tk_lua_fwrite(L, &tm->input_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fwrite(L, &tm->clause_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fwrite(L, &tm->state_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fwrite(L, &tm->weight_state_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fwrite(L, &tm->action_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fwrite(L, &tm->weight_action_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fwrite(L, &tm->class_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fwrite(L, &tm->filter, sizeof(unsigned int), 1, fh);
   tk_lua_fwrite(L, &tm->specificity_low, sizeof(double), 1, fh);
   tk_lua_fwrite(L, &tm->specificity_high, sizeof(double), 1, fh);
-  if (persist_state)
+  if (persist_state) {
     tk_lua_fwrite(L, tm->state, sizeof(unsigned int), tm->state_chunks, fh);
+    tk_lua_fwrite(L, tm->weight_state, sizeof(unsigned int), tm->weight_state_chunks, fh);
+  }
   tk_lua_fwrite(L, tm->actions, sizeof(unsigned int), tm->action_chunks, fh);
+  tk_lua_fwrite(L, tm->weight_actions, sizeof(unsigned int), tm->weight_action_chunks, fh);
 }
 
 static inline void tk_tsetlin_persist_classifier (lua_State *L, tsetlin_classifier_t *tm, FILE *fh, bool persist_state)
@@ -2128,26 +2242,39 @@ static inline void _tk_tsetlin_load_classifier (lua_State *L, tsetlin_classifier
   tk_lua_fread(L, &tm->input_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fread(L, &tm->clause_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fread(L, &tm->state_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fread(L, &tm->weight_state_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fread(L, &tm->action_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fread(L, &tm->weight_action_chunks, sizeof(unsigned int), 1, fh);
+  tk_lua_fread(L, &tm->class_chunks, sizeof(unsigned int), 1, fh);
   tk_lua_fread(L, &tm->filter, sizeof(unsigned int), 1, fh);
   tk_lua_fread(L, &tm->specificity_low, sizeof(double), 1, fh);
   tk_lua_fread(L, &tm->specificity_high, sizeof(double), 1, fh);
   tm->state = read_state ? malloc(sizeof(unsigned int) * tm->state_chunks) : NULL;
+  tm->weight_state = read_state ? malloc(sizeof(unsigned int) * tm->weight_state_chunks) : NULL;
   tm->actions = malloc(sizeof(unsigned int) * tm->action_chunks);
+  tm->weight_actions = malloc(sizeof(unsigned int) * tm->weight_action_chunks);
   tm->active_clause = read_state ? malloc(sizeof(unsigned int) * tm->clause_chunks) : NULL;
   tm->specificity = read_state ? malloc(sizeof(double) * tm->clauses) : NULL;
   if (read_state)
     for (unsigned int i = 0; i < tm->clauses; i ++)
       tm->specificity[i] = (1.0 * i / tm->clauses) * (tm->specificity_high - tm->specificity_low) + tm->specificity_low;
   tm->locks = read_state ? malloc(sizeof(pthread_mutex_t) * tm->action_chunks) : NULL;
-  if (read_state)
+  tm->weight_locks = read_state ? malloc(sizeof(pthread_mutex_t) * tm->weight_action_chunks) : NULL;
+  if (read_state) {
     for (unsigned int i = 0; i < tm->action_chunks; i ++)
       pthread_mutex_init(&tm->locks[i], NULL);
-  if (read_state)
+    for (unsigned int i = 0; i < tm->weight_action_chunks; i ++)
+      pthread_mutex_init(&tm->weight_locks[i], NULL);
+  }
+  if (read_state) {
     tk_lua_fread(L, tm->state, sizeof(unsigned int), tm->state_chunks, fh);
-  else if (has_state)
+    tk_lua_fread(L, tm->weight_state, sizeof(unsigned int), tm->weight_state_chunks, fh);
+  } else if (has_state) {
     tk_lua_fseek(L, sizeof(unsigned int), tm->state_chunks, fh);
+    tk_lua_fseek(L, sizeof(unsigned int), tm->weight_state_chunks, fh);
+  }
   tk_lua_fread(L, tm->actions, sizeof(unsigned int), tm->action_chunks, fh);
+  tk_lua_fread(L, tm->weight_actions, sizeof(unsigned int), tm->weight_action_chunks, fh);
 }
 
 static inline void tk_tsetlin_load_classifier (lua_State *L, FILE *fh, bool read_state, bool has_state)

@@ -1,6 +1,6 @@
 # Now
 
-- Sanitize
+- Coalesced
 - Avoid locking:
     - Shard based on clause?
     - Shared based on class/bit?
