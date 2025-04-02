@@ -808,15 +808,15 @@ static inline void mc_tm_update (
   unsigned int *feedback_to_clauses,
   unsigned int *feedback_to_la
 ) {
-  // tm_calculate_clause_output(tm, input, clause_output, false);
-  // tm_update(tm, input, class, 1, clause_output, feedback_to_clauses, feedback_to_la);
-  // unsigned int negative_class = (unsigned int) fast_rand() % tm->classes;
-  // while (negative_class == class)
-  //   negative_class = (unsigned int) fast_rand() % tm->classes;
-  // tm_update(tm, input, negative_class, 0, clause_output, feedback_to_clauses, feedback_to_la);
   tm_calculate_clause_output(tm, input, clause_output, false);
-  for (unsigned int i = 0; i < tm->classes; i ++)
-    tm_update(tm, input, i, i == class, clause_output, feedback_to_clauses, feedback_to_la);
+  tm_update(tm, input, class, 1, clause_output, feedback_to_clauses, feedback_to_la);
+  unsigned int negative_class = (unsigned int) fast_rand() % tm->classes;
+  while (negative_class == class)
+    negative_class = (unsigned int) fast_rand() % tm->classes;
+  tm_update(tm, input, negative_class, 0, clause_output, feedback_to_clauses, feedback_to_la);
+  // tm_calculate_clause_output(tm, input, clause_output, false);
+  // for (unsigned int i = 0; i < tm->classes; i ++)
+  //   tm_update(tm, input, i, i == class, clause_output, feedback_to_clauses, feedback_to_la);
 }
 
 static inline void ae_tm_decode (
