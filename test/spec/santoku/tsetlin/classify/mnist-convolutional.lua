@@ -24,6 +24,12 @@ local SPEC_HIGH = 200
 local ACTIVE = 0.75
 
 local FEATURES = 784
+local WIDTH = 28
+local HEIGHT = 28
+local PATCH_WIDTH = 10
+local PATCH_HEIGHT = 10
+local PATCH_STRIDE_X = 1
+local PATCH_STRIDE_Y = 1
 
 local function read_data (fp, skip, max)
   local problems = {}
@@ -88,23 +94,32 @@ test("tsetlin", function ()
   print("Splitting & packing")
   local n_train = num.floor(#dataset.problems * TTR)
   local n_test = #dataset.problems - n_train
-  FEATURES = num.round(FEATURES, 128)
   local train_problems, train_solutions = split_dataset(dataset, 1, n_train)
   local test_problems, test_solutions = split_dataset(dataset, n_train + 1, n_train + n_test)
+
+  print("Patching")
+  local num_patches, patch_size
+  train_problems, num_patches, patch_size = bm.convolve_2d(train_problems, n_train, WIDTH, HEIGHT, PATCH_WIDTH, PATCH_HEIGHT, PATCH_STRIDE_X, PATCH_STRIDE_Y, 128)
+  test_problems = bm.convolve_2d(test_problems, n_test, WIDTH, HEIGHT, PATCH_WIDTH, PATCH_HEIGHT, PATCH_STRIDE_X, PATCH_STRIDE_Y, 128)
+  print("Patch size", patch_size)
+  print("Number of patches", num_patches)
+  print("Effective features", num_patches * patch_size)
+  -- convolve_1d(x, patch, stride, round)
+  -- convolve_sinusoidal(x, wave, buckets, dims, round)
+
   str.printf("Train %d  Test %d\n", n_train, n_test)
 
-  print("Transforming train")
-  train_problems = bm.raw(bm.flip_interleave(train_problems, n_train, FEATURES), n_train * FEATURES * 2)
-
-  print("Transforming test")
-  test_problems = bm.raw(bm.flip_interleave(test_problems, n_test, FEATURES), n_test * FEATURES * 2)
+  print("Flip/interleave")
+  train_problems = bm.raw(bm.flip_interleave(train_problems, n_train * num_patches, patch_size), n_train * num_patches * patch_size * 2)
+  test_problems = bm.raw(bm.flip_interleave(test_problems, n_test * num_patches, patch_size), n_test * num_patches * patch_size * 2)
 
   print("Train", n_train)
   print("Test", n_test)
 
   print("Creating")
   local t = tm.classifier({
-    features = FEATURES,
+    features = patch_size,
+    convolution = num_patches,
     classes = CLASSES,
     clauses = CLAUSES,
     state = STATE,
