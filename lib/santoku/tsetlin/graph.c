@@ -100,7 +100,7 @@ static inline void tm_add_knn (
     return;
 
   // Prep shuffle
-  tk_ivec_t *shuf = tk_ivec_create(L, graph->uids->n, 0, 0);
+  tk_ivec_t *shuf = tk_ivec_create(L, graph->uids_hoods->n, 0, 0);
   tk_ivec_fill_indices(shuf);
   tk_ivec_shuffle(shuf);
 
@@ -109,15 +109,15 @@ static inline void tm_add_knn (
 
     for (uint64_t su = 0; su < shuf->n; su ++) {
       int64_t i = shuf->a[su];
-      int64_t u = graph->uids->a[i];
+      int64_t u = graph->uids_hoods->a[i];
       tk_rvec_t *ns = graph->inv_hoods->a[i];
       uint64_t rem_pos = knn_pos;
       uint64_t rem_neg = knn_neg;
       for (khint_t j = 0; j < ns->n && (rem_pos || rem_neg); j ++) {
         tk_rank_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         bool w = graph->labels == NULL || tk_graph_same_label(graph, u, v);
         if (w && !rem_pos) continue;
         if (!w && !rem_neg) continue;
@@ -143,15 +143,15 @@ static inline void tm_add_knn (
 
     for (uint64_t su = 0; su < shuf->n; su ++) {
       int64_t i = shuf->a[su];
-      int64_t u = graph->uids->a[i];
+      int64_t u = graph->uids_hoods->a[i];
       tk_pvec_t *ns = graph->ann_hoods->a[i];
       uint64_t rem_pos = knn_pos;
       uint64_t rem_neg = knn_neg;
       for (khint_t j = 0; j < ns->n && (rem_pos || rem_neg); j ++) {
         tk_pair_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         bool w = graph->labels == NULL || tk_graph_same_label(graph, u, v);
         if (w && !rem_pos) continue;
         if (!w && !rem_neg) continue;
@@ -177,15 +177,15 @@ static inline void tm_add_knn (
 
     for (uint64_t su = 0; su < shuf->n; su ++) {
       int64_t i = shuf->a[su];
-      int64_t u = graph->uids->a[i];
+      int64_t u = graph->uids_hoods->a[i];
       tk_pvec_t *ns = graph->hbi_hoods->a[i];
       uint64_t rem_pos = knn_pos;
       uint64_t rem_neg = knn_neg;
       for (khint_t j = 0; j < ns->n && (rem_pos || rem_neg); j ++) {
         tk_pair_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         bool w = graph->labels == NULL || tk_graph_same_label(graph, u, v);
         if (w && !rem_pos) continue;
         if (!w && !rem_neg) continue;
@@ -223,7 +223,7 @@ static inline tm_candidates_t tm_mst_knn_candidates (
     return all_candidates;
 
   // Prep shuffle
-  tk_ivec_t *shuf = tk_ivec_create(L, graph->uids->n, 0, 0);
+  tk_ivec_t *shuf = tk_ivec_create(L, graph->uids_hoods->n, 0, 0);
   tk_ivec_fill_indices(shuf);
   tk_ivec_shuffle(shuf);
 
@@ -240,9 +240,9 @@ static inline tm_candidates_t tm_mst_knn_candidates (
       int64_t cu = tk_dsu_find(&graph->dsu, u);
       for (khint_t j = 0; j < ns->n; j ++) {
         tk_rank_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         if (cu == tk_dsu_find(&graph->dsu, v))
           continue;
         tm_pair_t e = tm_pair(u, v);
@@ -266,9 +266,9 @@ static inline tm_candidates_t tm_mst_knn_candidates (
       int64_t cu = tk_dsu_find(&graph->dsu, u);
       for (khint_t j = 0; j < ns->n; j ++) {
         tk_pair_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         if (cu == tk_dsu_find(&graph->dsu, v))
           continue;
         tm_pair_t e = tm_pair(u, v);
@@ -292,9 +292,9 @@ static inline tm_candidates_t tm_mst_knn_candidates (
       int64_t cu = tk_dsu_find(&graph->dsu, u);
       for (khint_t j = 0; j < ns->n; j ++) {
         tk_pair_t r = ns->a[j];
-        if (r.i >= (int64_t) graph->uids->n || r.i < 0)
+        if (r.i >= (int64_t) graph->uids_hoods->n || r.i < 0)
           continue;
-        int64_t v = graph->uids->a[r.i];
+        int64_t v = graph->uids_hoods->a[r.i];
         if (cu == tk_dsu_find(&graph->dsu, v))
           continue;
         tm_pair_t e = tm_pair(u, v);
@@ -733,14 +733,17 @@ static inline int tm_graph_gc (lua_State *L)
 
 static inline void tm_setup_hoods (lua_State *L, int Gi, tk_graph_t *graph)
 {
-  if (graph->inv != NULL)
-    tk_inv_neighborhoods(L, graph->inv, graph->knn_cache, graph->knn_eps, TK_INV_JACCARD, &graph->inv_hoods, &graph->uids);
-  else if (graph->ann != NULL)
-    tk_ann_neighborhoods(L, graph->ann, graph->knn_cache, graph->ann->features * graph->knn_eps, &graph->ann_hoods, &graph->uids);
-  else if (graph->hbi != NULL)
-    tk_hbi_neighborhoods(L, graph->hbi, graph->knn_cache, graph->hbi->features * graph->knn_eps, &graph->hbi_hoods, &graph->uids);
-  else
+  if (graph->inv != NULL) {
+    tk_inv_neighborhoods(L, graph->inv, graph->knn_cache, graph->knn_eps, TK_INV_JACCARD, &graph->inv_hoods, &graph->uids_hoods);
+  } else if (graph->ann != NULL) {
+    tk_ann_neighborhoods(L, graph->ann, graph->knn_cache, graph->ann->features * graph->knn_eps, &graph->ann_hoods, &graph->uids_hoods);
+  } else if (graph->hbi != NULL) {
+    tk_hbi_neighborhoods(L, graph->hbi, graph->knn_cache, graph->hbi->features * graph->knn_eps, &graph->hbi_hoods, &graph->uids_hoods);
+  } else {
     return;
+  }
+  if (graph->uids == NULL)
+    graph->uids = graph->uids_hoods;
   tk_lua_add_ephemeron(L, TK_GRAPH_EPH, Gi, -2); // uids
   tk_lua_add_ephemeron(L, TK_GRAPH_EPH, Gi, -1); // hoods
   lua_pop(L, 2);
@@ -798,8 +801,8 @@ static inline int tm_create (lua_State *L)
   // Query hoods from inv index
   tm_setup_hoods(L, Gi, graph);
   graph->uid_hood = tk_iumap_create();
-  for (uint64_t i = 0; i < graph->uids->n; i ++) {
-    khi = tk_iumap_put(graph->uid_hood, graph->uids->a[i], &kha);
+  for (uint64_t i = 0; i < graph->uids_hoods->n; i ++) {
+    khi = tk_iumap_put(graph->uid_hood, graph->uids_hoods->a[i], &kha);
     tk_iumap_value(graph->uid_hood, khi) = (int64_t) i;
   }
 
@@ -912,7 +915,8 @@ static luaL_Reg tm_graph_mt_fns[] =
 
 static inline tk_graph_t *tm_graph_create (
   lua_State *L,
-  int i_ids, tk_ivec_t *ids,
+  int i_ids,
+  tk_ivec_t *ids,
   tk_pvec_t *pos,
   tk_pvec_t *neg,
   tk_ivec_t *labels,
@@ -924,6 +928,7 @@ static inline tk_graph_t *tm_graph_create (
   unsigned int n_threads
 ) {
   tk_graph_t *graph = tk_lua_newuserdata(L, tk_graph_t, TK_GRAPH_MT, tm_graph_mt_fns, tm_graph_gc); // ud
+  memset(graph, 0, sizeof(tk_graph_t));
   int Gi = tk_lua_absindex(L, -1);
   graph->threads = tk_malloc(L, n_threads * sizeof(tk_graph_thread_t));
   memset(graph->threads, 0, n_threads * sizeof(tk_graph_thread_t));

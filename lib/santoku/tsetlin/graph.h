@@ -31,6 +31,7 @@ typedef struct tk_graph_thread_s tk_graph_thread_t;
 typedef struct tk_graph_s {
   tm_pairs_t *pairs;
   tk_ivec_t *uids;
+  tk_ivec_t *uids_hoods;
   tk_iumap_t *uid_hood;
   tk_graph_adj_t *adj_pos, *adj_neg;
   tk_inv_t *inv;
