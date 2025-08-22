@@ -1,5 +1,6 @@
 /*
 
+Copyright (C) 2025 Matthew Brooks (FuzzyPattern TM added)
 Copyright (C) 2024 Matthew Brooks (Persist to and restore from disk)
 Copyright (C) 2024 Matthew Brooks (Lua integration, train/evaluate)
 Copyright (C) 2024 Matthew Brooks (Loss scaling, multi-threading, auto-vectorizer support)
