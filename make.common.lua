@@ -1,6 +1,6 @@
 local env = {
   name = "santoku-tsetlin",
-  version = "0.0.216-1",
+  version = "0.0.216-3",
   variable_prefix = "TK_TSETLIN",
   license = "MIT",
   public = true,
@@ -50,12 +50,12 @@ local env = {
   },
   dependencies = {
     "lua >= 5.1",
-    "santoku >= 0.0.294-1",
-    "santoku-matrix >= 0.0.168-1",
+    "santoku == 0.0.294-1",
+    "santoku-matrix == 0.0.168-1",
   },
   test = {
     dependencies = {
-      "santoku-fs >= 0.0.34-1",
+      "santoku-fs == 0.0.34-1",
       "lua-cjson >= 2.1.0.10-1",
     }
   },
